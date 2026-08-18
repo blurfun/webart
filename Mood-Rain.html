@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="application-name" content="Mood Rain">
+    <title>Moodfall: A Tiny Gravity Playground</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #408cff; }
+        canvas { display: block; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+
+<script>
+    // ==========================================
+    // 1. Core tuning
+    // ==========================================
+    const PARAMS = {
+        gravity: 0.90,       
+        airResistance: 0.09, 
+        mouseLag: 0.25,      
+        mouseRadius: 20,     
+        
+        // --- Animation ---
+        growSpeed: 1.02,     // Pop-out growth rate
+        shrinkSpeed: 0.90,   // Fade-out shrink rate
+        maxPopScale: 1.15,   // Peak pop scale before shrinking
+        hoverScale: 1.15,    // Hover pulse scale
+        
+        // --- Population control ---
+        maxCount: 100,       // Maximum on-screen bodies for a satisfying pile-up
+        crowdThreshold: 60,  // Start thinning the crowd once the scene gets busy
+        
+        pulseSpeed: 0.1,     
+        pulseMaxScale: 1.2   
+    };
+
+    const CONFIG = {
+        stroke: '#7B6D55',   
+        fill: '#FDFAF2',     
+        fillHover: '#FF6B6B', // Alert red
+        width: 1.2,          
+        bg: '#f0f2f5'        
+    };
+
+    // ==========================================
+    // 2. SVG templates
+    // ==========================================
+    const getSvgContent = (fillColor) => [
+        `<g class="head-group"><path d="M45,6 C 65,8 85,18 92,40 C 98,62 88,85 70,94 C 52,102 25,95 12,80 C 2,62 5,35 18,20 C 25,12 35,5 45,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M15,5 L5,25 L25,20 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M35,40 C45,35 65,35 75,40" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M65,55 C75,55 85,60 85,70 C85,80 75,75 65,75 C55,75 45,60 65,55 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M85,65 C95,60 98,70 90,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M10,10 L15,15 M80,10 L75,15 M15,80 L20,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 0.7}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M52,7 C 72,9 88,22 94,45 C 99,68 88,88 70,96 C 50,103 28,94 15,78 C 5,60 8,38 20,22 C 28,12 40,6 52,7" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,35 L75,35" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M35,50 L40,50 M60,50 L65,50" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M30,75 L70,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M48,5 C 68,6 86,15 93,38 C 98,60 90,82 72,92 C 55,100 30,95 16,82 C 4,65 6,40 18,25 C 26,14 38,4 48,5" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,35 L35,40 L25,45 M75,35 L65,40 L75,45" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M20,60 C25,55 75,55 80,60 C85,80 65,90 50,90 C35,90 15,80 20,60 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M50,8 C 70,10 86,22 92,45 C 97,68 86,88 68,96 C 48,103 26,94 14,78 C 4,60 7,38 20,22 C 28,12 40,7 50,8" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M30,35 C35,30 45,30 50,35 M65,35 C70,30 80,30 85,35" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M30,75 C40,60 60,60 70,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M80,45 C75,50 75,60 80,65 C85,60 85,50 80,45 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M53,6 C 73,8 89,20 95,42 C 100,65 90,86 72,95 C 52,103 28,95 15,80 C 5,62 8,39 20,23 C 28,13 40,5 53,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M30,35 C40,30 50,30 55,35 M65,35 C75,30 85,30 90,35" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M40,45 L45,45 M75,45 L80,45" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M35,70 C45,75 65,65 75,60" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M47,7 C 67,9 84,21 90,44 C 95,67 85,87 66,96 C 46,104 24,95 12,79 C 2,61 5,39 18,23 C 26,13 37,6 47,7" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,30 L50,45 M85,30 L60,45" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M35,55 L40,55 M70,55 L75,55" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M35,75 C45,65 65,65 75,75 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M80,65 L90,60 M85,75 L95,70" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 0.7}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M50,9 C 70,11 86,24 92,47 C 97,70 86,90 68,98 C 48,105 26,96 14,80 C 4,62 7,40 20,24 C 28,14 40,8 50,9" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,40 L35,45 L25,50 M75,40 L65,45 L75,50" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M30,70 L40,65 L50,70 L60,65 L70,70" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M48,6 C 68,8 85,19 91,42 C 96,65 86,86 67,95 C 47,102 25,93 13,77 C 3,59 6,37 18,21 C 27,11 38,5 48,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M30,35 C35,30 45,30 50,35 C50,45 40,45 35,40 C30,40 30,35 30,35 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M65,35 C70,30 80,30 85,35 C85,45 75,45 70,40 C65,40 65,35 65,35 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M35,75 C45,65 55,65 65,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M51,8 C 71,10 87,23 93,46 C 98,69 88,89 69,97 C 49,104 27,95 15,79 C 5,61 8,39 21,23 C 29,13 41,7 51,8" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,35 L45,55 M45,35 L25,55" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M65,35 L85,55 M85,35 L65,55" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M35,75 C45,65 65,65 75,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M49,5 C 69,7 85,18 91,41 C 97,63 87,84 68,93 C 48,101 26,92 14,76 C 4,58 7,36 19,20 C 27,10 39,4 49,5" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M25,40 C35,35 45,35 50,40 M65,40 C75,35 85,35 90,40" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M30,65 C45,80 65,80 80,65" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M53,7 C 73,9 89,22 95,45 C 100,68 90,88 72,97 C 52,104 28,95 15,80 C 5,62 8,40 20,24 C 28,14 40,6 53,7" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M30,40 C40,35 50,35 55,40 C55,45 45,45 40,40 C35,40 30,40 30,40 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M70,40 C80,35 90,35 95,40 C95,45 85,45 80,40 C75,40 70,40 70,40 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M25,65 C30,60 80,60 85,65 C85,85 30,85 25,65 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M28,75 L82,75 M40,62 L40,82 M55,62 L55,82 M70,62 L70,82" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 0.8}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M47,6 C 67,8 84,20 90,43 C 95,66 85,86 66,95 C 46,102 24,93 12,78 C 2,60 5,38 18,22 C 26,12 37,5 47,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M35,40 L40,40 M70,40 L75,40" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M35,70 L75,60" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M50,9 C 70,11 86,24 92,47 C 97,70 86,90 68,98 C 48,105 26,96 14,80 C 4,62 7,40 20,24 C 28,14 40,8 50,9" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M30,40 L45,45 L30,50 M80,40 L65,45 L80,50" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M30,75 C40,60 70,60 80,75 C75,85 35,85 30,75 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/><path d="M15,20 C20,15 25,15 30,20 M80,20 C85,15 90,15 95,20" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 0.7}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M60,7 C 80,9 96,22 102,45 C 107,68 97,88 78,96 C 58,103 36,94 24,78 C 14,60 17,38 30,22 C 38,12 50,6 60,7" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M45,45 L50,45 M80,45 L85,45" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M55,70 C60,65 75,65 80,70 C75,75 60,75 55,70 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group utensils"><path d="M20,30 C15,30 15,50 20,55 L20,90" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round" transform="rotate(-10 20 50)"/><path d="M110,30 L110,55 M100,30 L100,55 M120,30 L120,55 M100,55 C110,65 120,55 110,55 L110,90" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round" transform="rotate(10 110 50)"/></g>`,
+        `<g class="head-group"><path d="M51,6 C 71,8 87,20 93,43 C 98,66 88,86 70,95 C 50,102 28,93 16,77 C 6,59 9,37 21,21 C 29,11 41,5 51,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M35,45 C35,35 25,35 25,45 C25,55 35,65 35,65 C35,65 45,55 45,45 C45,35 35,35 35,45 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round" transform="translate(-5, -5) scale(0.9) rotate(-5 35 45)"/><path d="M75,45 C75,35 65,35 65,45 C65,55 75,65 75,65 C75,65 85,55 85,45 C85,35 75,35 75,45 Z" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round" transform="translate(5, -5) scale(0.9) rotate(5 75 45)"/><path d="M30,75 C45,90 65,90 80,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`,
+        `<g class="head-group"><path d="M49,6 C 69,8 86,20 92,43 C 97,66 87,86 68,95 C 48,102 26,93 14,77 C 4,59 7,37 20,21 C 28,11 39,5 49,6" fill="${fillColor}" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g><g class="features-group"><path d="M35,45 L40,45 M70,45 L75,45" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width * 1.3}" stroke-linecap="butt" stroke-linejoin="round"/><path d="M30,75 C45,60 65,60 80,75" fill="none" stroke="${CONFIG.stroke}" stroke-width="${CONFIG.width}" stroke-linecap="round" stroke-linejoin="round"/></g>`
+    ];
+
+    // ==========================================
+    // 3. Texture generation
+    // ==========================================
+    function createIconImage(svgContent) {
+        const svgString = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10 -10 120 120" width="480" height="480">${svgContent}</svg>`;
+        const blob = new Blob([svgString], {type: 'image/svg+xml'});
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.src = url;
+        return { img: img, url: url };
+    }
+
+    const normalSvgs = getSvgContent(CONFIG.fill);
+    const hoverSvgs = getSvgContent(CONFIG.fillHover);
+
+    const texturePool = normalSvgs.map((svgNormal, index) => {
+        const svgHover = hoverSvgs[index];
+        return {
+            normal: createIconImage(svgNormal),
+            hover: createIconImage(svgHover)
+        };
+    });
+
+    // ==========================================
+    // 4. Matter.js engine
+    // ==========================================
+    const Engine = Matter.Engine,
+          Render = Matter.Render,
+          Runner = Matter.Runner,
+          Bodies = Matter.Bodies,
+          Body = Matter.Body,
+          Composite = Matter.Composite,
+          Events = Matter.Events,
+          Common = Matter.Common,
+          Query = Matter.Query;
+
+    const engine = Engine.create();
+    engine.world.gravity.y = PARAMS.gravity;
+    const world = engine.world;
+
+    const render = Render.create({
+        element: document.body,
+        engine: engine,
+        options: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            background: CONFIG.bg,
+            wireframes: false,
+            pixelRatio: window.devicePixelRatio
+        }
+    });
+
+    // ==========================================
+    // 5. Mouse repulsion
+    // ==========================================
+    const mouseRepulsor = Bodies.circle(-1000, -1000, PARAMS.mouseRadius, {
+        isStatic: true,
+        render: { visible: false }
+    });
+    Composite.add(world, mouseRepulsor);
+
+    let targetMouseX = -1000;
+    let targetMouseY = -1000;
+
+    document.addEventListener('mousemove', (e) => {
+        targetMouseX = e.clientX;
+        targetMouseY = e.clientY;
+    });
+    document.addEventListener('mouseleave', () => {
+        targetMouseX = -1000;
+        targetMouseY = -1000;
+    });
+
+    // ==========================================
+    // 6. Main simulation loop
+    // ==========================================
+    
+    // A. Collision-triggered exit behavior
+    Events.on(engine, 'collisionStart', function(event) {
+        const pairs = event.pairs;
+        const now = Date.now();
+        const screenHeight = window.innerHeight;
+
+        for (let i = 0; i < pairs.length; i++) {
+            const bodyA = pairs[i].bodyA;
+            const bodyB = pairs[i].bodyB;
+            checkCollisionDeath(bodyA, now, screenHeight);
+            checkCollisionDeath(bodyB, now, screenHeight);
+        }
+    });
+
+    function checkCollisionDeath(body, now, screenHeight) {
+        if (body.isStatic || !body.plugin || body.plugin.dyingPhase !== 0) return;
+        const age = now - body.plugin.birthTime;
+        // Older icons in the lower half have a small chance to pop out on impact.
+        if (age > 1500 && body.position.y > screenHeight * 0.5) {
+            if (Math.random() < 0.02) { // 2% chance to exit after a collision
+                startDying(body);
+            }
+        }
+    }
+
+    // B. Randomized crowd control
+    setInterval(() => {
+        const bodies = Composite.allBodies(world);
+        // When the pile gets dense, randomly clear older icons near the bottom.
+        if (bodies.length > PARAMS.crowdThreshold) {
+            const now = Date.now();
+            const screenHeight = window.innerHeight;
+            
+            // Sample a few bodies each pass instead of scanning the whole scene.
+            for(let k=0; k<5; k++) {
+                const body = Common.choose(bodies);
+                if (body && !body.isStatic && body.plugin && body.plugin.dyingPhase === 0) {
+                    const age = now - body.plugin.birthTime;
+                    if (age > 3000 && body.position.y > screenHeight * 0.6) {
+                        // Crowded scenes clear more aggressively.
+                        if (Math.random() < 0.3) startDying(body);
+                    }
+                }
+            }
+        }
+    }, 500); // Check crowding twice per second
+
+    function startDying(body) {
+        body.plugin.dyingPhase = 1;
+        // Switch to the alert texture immediately.
+        if (body.render.sprite.texture !== body.plugin.texPair.hover.url) {
+            body.render.sprite.texture = body.plugin.texPair.hover.url;
+        }
+    }
+
+    // C. Per-frame updates for animation and pointer input
+    Events.on(engine, 'beforeUpdate', function() {
+        // 1. Smoothly move the invisible repulsor toward the pointer.
+        const currentPos = mouseRepulsor.position;
+        const dx = targetMouseX - currentPos.x;
+        const dy = targetMouseY - currentPos.y;
+        Body.translate(mouseRepulsor, {
+            x: dx * PARAMS.mouseLag, 
+            y: dy * PARAMS.mouseLag
+        });
+
+        // 2. Track hover states for the pulse overlay.
+        const bodies = Composite.allBodies(world);
+        const hoveredBodies = Query.point(bodies, { x: targetMouseX, y: targetMouseY });
+
+        for (let i = 0; i < bodies.length; i++) {
+            const body = bodies[i];
+            const p = body.plugin;
+            if (body.isStatic || !p) continue;
+
+            // --- Hover pulse ---
+            const isHovered = hoveredBodies.includes(body);
+            if (isHovered) p.isHovering = true;
+            else p.isHovering = false;
+
+            if (p.isHovering || p.pulsePhase > 0) {
+                p.pulsePhase += PARAMS.pulseSpeed;
+                if (p.pulsePhase >= Math.PI) {
+                    if (p.isHovering) p.pulsePhase = 0; 
+                    else p.pulsePhase = 0; 
+                }
+            }
+
+            // --- Exit animation ---
+            if (p.dyingPhase === 1) { // Grow
+                const rate = PARAMS.growSpeed; 
+                Body.scale(body, rate, rate);
+                p.currentScale *= rate;
+                if (body.render.sprite) {
+                    body.render.sprite.xScale = p.currentScale;
+                    body.render.sprite.yScale = p.currentScale;
+                }
+                // Once it reaches the target pop scale, begin shrinking.
+                if (p.currentScale >= p.originalScale * PARAMS.maxPopScale) {
+                    p.dyingPhase = 2;
+                }
+            } 
+            else if (p.dyingPhase === 2) { // Shrink
+                const rate = PARAMS.shrinkSpeed; 
+                Body.scale(body, rate, rate);
+                p.currentScale *= rate;
+                if (body.render.sprite) {
+                    body.render.sprite.xScale = p.currentScale;
+                    body.render.sprite.yScale = p.currentScale;
+                }
+                if (p.currentScale < 0.05) Composite.remove(world, body);
+            }
+        }
+    });
+
+    // ==========================================
+    // 7. Post-render hover pulse layer
+    // ==========================================
+    Events.on(render, 'afterRender', function() {
+        const ctx = render.context;
+        const bodies = Composite.allBodies(world);
+
+        for (let i = 0; i < bodies.length; i++) {
+            const body = bodies[i];
+            const p = body.plugin;
+            
+            // Only active icons get the hover pulse overlay.
+            if (p && p.pulsePhase > 0 && p.dyingPhase === 0) {
+                const alpha = Math.sin(p.pulsePhase); 
+                const pulseScale = 1 + alpha * (PARAMS.hoverScale - 1);
+
+                ctx.save();
+                ctx.translate(body.position.x, body.position.y);
+                ctx.rotate(body.angle);
+                
+                ctx.globalAlpha = alpha;
+                const img = p.texPair.hover.img;
+                if (img.complete) {
+                    const size = 480; 
+                    const displayScale = body.render.sprite.xScale * pulseScale;
+                    ctx.scale(displayScale, displayScale);
+                    ctx.drawImage(img, -size/2, -size/2, size, size);
+                }
+                ctx.restore();
+            }
+        }
+    });
+
+    // ==========================================
+    // 8. Boundaries and spawning
+    // ==========================================
+    function createBoundaries() {
+        Composite.clear(world, false, true); 
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const t = 100;
+        const ground = Bodies.rectangle(w/2, h + t/2, w, t, { isStatic: true, render: { visible: false } });
+        const left = Bodies.rectangle(-t/2, h/2, t, h*5, { isStatic: true, render: { visible: false } });
+        const right = Bodies.rectangle(w + t/2, h/2, t, h*5, { isStatic: true, render: { visible: false } });
+        Composite.add(world, [ground, left, right, mouseRepulsor]);
+        Body.set(mouseRepulsor, { circleRadius: PARAMS.mouseRadius });
+    }
+    createBoundaries();
+
+    window.addEventListener('resize', () => {
+        render.canvas.width = window.innerWidth;
+        render.canvas.height = window.innerHeight;
+        createBoundaries();
+    });
+
+    function spawn() {
+        const texPair = Common.choose(texturePool);
+        const size = Common.random(35, 50); 
+        const scale = (size * 2) / 480;
+
+        const x = Common.random(50, window.innerWidth - 50);
+        const y = -80;
+
+        const body = Bodies.circle(x, y, size, {
+            restitution: 0.3,
+            friction: 0.5,
+            frictionAir: PARAMS.airResistance, 
+            angle: Math.random() * Math.PI * 2,
+            render: {
+                sprite: {
+                    texture: texPair.normal.url, 
+                    xScale: scale, 
+                    yScale: scale
+                }
+            },
+            plugin: {
+                birthTime: Date.now(),
+                dyingPhase: 0, 
+                maxScale: scale * PARAMS.maxPopScale,
+                originalScale: scale,
+                currentScale: scale,
+                texPair: texPair,
+                isHovering: false,
+                pulsePhase: 0
+            }
+        });
+
+        Composite.add(world, body);
+    }
+
+    // Keep spawning until the scene reaches the population cap.
+    setInterval(() => {
+        if (Composite.allBodies(world).length < PARAMS.maxCount) spawn();
+    }, 150);
+
+    document.addEventListener('mousedown', spawn);
+    document.addEventListener('touchstart', spawn);
+
+    Render.run(render);
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+
+</script>
+</body>
+</html>
